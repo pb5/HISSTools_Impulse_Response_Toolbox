@@ -67,6 +67,7 @@ int main (void)
 	
 	class_addmethod(this_class, (method)bufconvolve_process, "convolve", A_GIMME, 0L);
 	class_addmethod(this_class, (method)bufconvolve_process, "deconvolve", A_GIMME, 0L);
+    class_addmethod(this_class, (method)bufconvolve_process, "accel", A_GIMME, 0L);
 		
 	class_addmethod(this_class, (method)bufconvolve_assist, "assist", A_CANT, 0L);
 	class_register(CLASS_BOX, this_class);
@@ -115,9 +116,11 @@ void bufconvolve_assist(t_bufconvolve *x, void *b, long m, long a, char *s)
 
 void bufconvolve_process(t_bufconvolve *x, t_symbol *sym, long argc, t_atom *argv)
 {
-	t_atom temp_argv[4];
+	t_atom temp_argv[5];
 	double time_mul = 1.;
-					  
+    
+    long accel = 0;
+    
 	// Load and check arguments
 	
 	if (argc < 3)
@@ -126,7 +129,7 @@ void bufconvolve_process(t_bufconvolve *x, t_symbol *sym, long argc, t_atom *arg
 		return;
 	}
 	
-	if (sym == gensym("deconvolve") && argc > 3)
+	if ((sym == gensym("deconvolve") || sym == gensym("accel")) && argc > 3)
 	{
 		time_mul = atom_getfloat(argv + 3);
 		
@@ -135,18 +138,21 @@ void bufconvolve_process(t_bufconvolve *x, t_symbol *sym, long argc, t_atom *arg
 			object_warn((t_object *) x, " time multiplier cannot be less than 1 (using 1)");
 			time_mul = 1;
 		}
-	}
+    }
 	
+    accel = sym == gensym("accel") ? true : false;
+    
 	temp_argv[0] = *argv++;
 	temp_argv[1] = *argv++;
 	temp_argv[2] = *argv++;
 	atom_setfloat(temp_argv + 3, time_mul);
+    atom_setlong(temp_argv + 4, accel);
 		
-	defer(x, (method) bufconvolve_process_internal, sym, 4, temp_argv);
+	defer(x, (method) bufconvolve_process_internal, sym, 5, temp_argv);
 }
 
 
-void bufconvolve_process_internal (t_bufconvolve *x, t_symbol *sym, short argc, t_atom *argv)
+void bufconvolve_process_internal(t_bufconvolve *x, t_symbol *sym, short argc, t_atom *argv)
 {
 	FFT_SETUP_D fft_setup;
 	
@@ -169,7 +175,11 @@ void bufconvolve_process_internal (t_bufconvolve *x, t_symbol *sym, short argc, 
 	double range_specifier[HIRT_MAX_SPECIFIER_ITEMS];
 	
 	double time_mul = atom_getfloat(argv++);
-	double sample_rate = buffer_sample_rate(source_1); 
+    
+    //FIX - temp
+    bool accel = atom_getlong(argv++);
+    
+	double sample_rate = buffer_sample_rate(source_1);
 	double deconvolve_phase = phase_retriever(x->deconvolve_phase);
 	double deconvolve_delay;
 		
@@ -251,6 +261,27 @@ void bufconvolve_process_internal (t_bufconvolve *x, t_symbol *sym, short argc, 
 		convolve(spectrum_1, spectrum_2, fft_size, SPECTRUM_REAL);	
 	else
 	{
+        if (accel)
+        {
+            // FIX - temp integration
+        
+            post("TEMP");
+        
+            spectrum_2.realp[0] = 0.0;
+        
+            for (int i = 0; i < fft_size >> 1; i++)
+            {
+                COMPLEX_DOUBLE a, b;
+            
+                b = I * i * (2 * M_PI);
+
+                a = CSET(spectrum_2.realp[i], spectrum_2.imagp[i]);
+                a = CMUL(a, b);
+            
+                spectrum_2.realp[i] = CREAL(a);
+                spectrum_2.imagp[i] = CIMAG(a);
+            }
+        }
 		// Fill deconvolution filter specifiers - load filter from buffer (if specified) - deconvolve
 		
 		fill_power_array_specifier(filter_specifier, x->deconvolve_filter_specifier, x->deconvolve_num_filter_specifiers);
